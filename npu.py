@@ -137,14 +137,32 @@ def classify(
         label: mac_score(pattern, filters[label])
         for label in STANDARD_LABELS
     }
-    difference = scores["Cross"] - scores["X"]
-    if abs(difference) < epsilon:
-        predicted = "UNDECIDED"
-    elif difference > 0:
-        predicted = "Cross"
-    else:
-        predicted = "X"
+    predicted = compare_scores(
+        scores["Cross"],
+        scores["X"],
+        "Cross",
+        "X",
+        epsilon,
+    )
     return Classification(scores=scores, predicted=predicted)
+
+
+def compare_scores(
+    score_a: float,
+    score_b: float,
+    label_a: str = "A",
+    label_b: str = "B",
+    epsilon: float = EPSILON,
+) -> str:
+    """두 점수를 비교해 우세 라벨 또는 UNDECIDED를 반환한다."""
+    if epsilon < 0:
+        raise ValueError("epsilon은 0 이상이어야 합니다.")
+    difference = score_a - score_b
+    if abs(difference) < epsilon:
+        return "UNDECIDED"
+    if difference > 0:
+        return label_a
+    return label_b
 
 
 def benchmark_mac(
