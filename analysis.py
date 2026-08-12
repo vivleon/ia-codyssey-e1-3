@@ -21,6 +21,7 @@ from npu import (
 
 
 PATTERN_KEY = re.compile(r"^size_(\d+)_(\d+)$")
+FILTER_KEYS = {"Cross": "cross", "X": "x"}
 
 
 class DataAnalysisError(ValueError):
@@ -193,7 +194,8 @@ def _extract_size(identifier: str) -> int:
     match = PATTERN_KEY.fullmatch(identifier)
     if match is None:
         raise CaseSchemaError(
-            "패턴 키는 size_{N}_{idx} 형식이어야 합니다."
+            "패턴 키는 size_{N}_{idx} 형식이어야 합니다"
+            "(예: size_5_1)."
         )
     return int(match.group(1))
 
@@ -205,7 +207,10 @@ def _load_filter_group(
     group_key = f"size_{size}"
     raw_group = raw_filters.get(group_key)
     if not isinstance(raw_group, dict):
-        raise CaseSchemaError(f"{group_key} 필터 객체가 없습니다.")
+        raise CaseSchemaError(
+            f"{group_key} 필터 객체가 없습니다. "
+            f"filters에 {group_key} 키와 cross/x 필터를 추가하세요."
+        )
 
     normalized_filters: Dict[str, Matrix] = {}
     for raw_label, raw_matrix in raw_group.items():
@@ -224,7 +229,14 @@ def _load_filter_group(
         label for label in STANDARD_LABELS if label not in normalized_filters
     ]
     if missing:
-        raise CaseSchemaError(f"필수 필터가 없습니다: {', '.join(missing)}")
+        missing_keys = [
+            FILTER_KEYS.get(label, label.lower())
+            for label in missing
+        ]
+        raise CaseSchemaError(
+            f"필수 필터가 없습니다: {', '.join(missing)}. "
+            f"{group_key}에 {', '.join(missing_keys)} 키를 추가하세요."
+        )
     return normalized_filters
 
 

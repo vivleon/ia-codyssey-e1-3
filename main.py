@@ -1,6 +1,8 @@
 """Mini NPU Simulator 콘솔 애플리케이션."""
 
 import argparse
+import json
+import math
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
@@ -33,11 +35,22 @@ class SimulatorApp:
         repeats: int = 10,
         input_func: Callable[[str], str] = input,
         output_func: Callable[[str], None] = print,
+        epsilon: float = EPSILON,
+        summary_json: bool = False,
     ) -> None:
         if repeats < 10:
             raise ValueError("성능 측정 반복 횟수는 최소 10회여야 합니다.")
+        if (
+            isinstance(epsilon, bool)
+            or not isinstance(epsilon, (int, float))
+            or not math.isfinite(epsilon)
+            or epsilon <= 0
+        ):
+            raise ValueError("epsilon은 0보다 큰 유한한 숫자여야 합니다.")
         self.data_path = Path(data_path)
         self.repeats = repeats
+        self.epsilon = float(epsilon)
+        self.summary_json = summary_json
         self.input = input_func
         self.output = output_func
 
@@ -71,6 +84,7 @@ class SimulatorApp:
     def read_matrix(self, title: str, size: int = 3) -> Matrix:
         """행 단위 숫자 입력을 검증하고 n×n Matrix로 만든다."""
         self.output(f"\n{title} ({size}줄 입력, 공백 구분)")
+        self.output("입력을 취소하려면 Ctrl+C를 누르세요.")
         rows: List[List[float]] = []
         for row_index in range(size):
             while True:
@@ -111,7 +125,13 @@ class SimulatorApp:
 
         score_a = mac_score(pattern, filter_a)
         score_b = mac_score(pattern, filter_b)
-        predicted = compare_scores(score_a, score_b, "A", "B", EPSILON)
+        predicted = compare_scores(
+            score_a,
+            score_b,
+            "A",
+            "B",
+            self.epsilon,
+        )
         average_ms = benchmark_mac(pattern, filter_a, self.repeats)
 
         self.output("\n" + "-" * 48)
@@ -124,9 +144,11 @@ class SimulatorApp:
             f"{average_ms:.6f} ms"
         )
         if predicted == "UNDECIDED":
-            self.output(
-                f"판정: 판정 불가 (|A-B| < {EPSILON:g})"
-            )
+            # 내부 판정값은 유지하고 사용자 모드에서만
+            # 쉬운 한국어로 표시한다.
+            difference = abs(score_a - score_b)
+            self.output(f"판정: 판정 불가 (|A-B| < {self.epsilon:g})")
+            self.output(f"점수 차이: {difference:.16g}")
         else:
             self.output(f"판정: {predicted}")
 
@@ -151,7 +173,7 @@ class SimulatorApp:
         try:
             data = load_json_file(data_path)
             self.output(f"✓ 로드 완료: {data_path}")
-            report = analyze_dataset(data, EPSILON)
+            report = analyze_dataset(data, self.epsilon)
         except DataAnalysisError as error:
             self.output(f"분석 중단 ({data_path}): {error}")
             return False
@@ -216,6 +238,27 @@ class SimulatorApp:
         else:
             self.output("\n실패 케이스가 없습니다.")
 
+        if self.summary_json:
+            summary = {
+                "total": report.total_count,
+                "passed": report.passed_count,
+                "failed": report.failed_count,
+                "epsilon": self.epsilon,
+                "failures": [
+                    {
+                        "identifier": result.identifier,
+                        "predicted": result.predicted,
+                        "expected": result.expected,
+                        "reason": result.reason,
+                    }
+                    for result in report.failures
+                ],
+            }
+            self.output(
+                "SUMMARY_JSON: "
+                + json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
+            )
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Mini NPU Simulator")
@@ -236,13 +279,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=10,
         help="크기별 MAC 반복 측정 횟수(최소 10)",
     )
+    parser.add_argument(
+        "--epsilon",
+        type=float,
+        default=EPSILON,
+        help="동점으로 간주할 절대 허용오차(기본값: 1e-9)",
+    )
+    parser.add_argument(
+        "--summary-json",
+        action="store_true",
+        help="사람용 결과 뒤에 SUMMARY_JSON 한 줄 출력",
+    )
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
     try:
-        app = SimulatorApp(data_path=args.data, repeats=args.repeats)
+        app = SimulatorApp(
+            data_path=args.data,
+            repeats=args.repeats,
+            epsilon=args.epsilon,
+            summary_json=args.summary_json,
+        )
     except ValueError as error:
         print(f"설정 오류: {error}")
         return 2
