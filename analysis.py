@@ -129,6 +129,8 @@ def analyze_dataset(
 
             filters = _load_filter_group(raw_filters, size)
             classification = classify(pattern, filters, epsilon)
+            # expected는 Cross 또는 X로 정규화된다. 동점인 UNDECIDED는 어느
+            # 기대 라벨과도 같지 않으므로 분석 리포트에서 FAIL로 집계한다.
             passed = classification.predicted == expected
             reason = _comparison_reason(
                 classification.predicted,

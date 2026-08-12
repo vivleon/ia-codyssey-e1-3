@@ -7,6 +7,7 @@ from typing import Dict, List, Mapping, Sequence
 
 EPSILON = 1e-9
 STANDARD_LABELS = ("Cross", "X")
+WARMUP_REPEATS = 3
 
 
 class MatrixError(ValueError):
@@ -174,7 +175,10 @@ def benchmark_mac(
     if isinstance(repeats, bool) or not isinstance(repeats, int) or repeats <= 0:
         raise ValueError("반복 횟수는 1 이상의 정수여야 합니다.")
 
-    mac_score(pattern, filter_matrix)
+    # 짧은 연산은 첫 호출 비용과 실행 환경의 순간적인 영향을 크게 받는다.
+    # 측정에 포함하지 않는 소규모 워밍업으로 캐시와 인터프리터 경로를 준비한다.
+    for _ in range(WARMUP_REPEATS):
+        mac_score(pattern, filter_matrix)
     started_at = perf_counter_ns()
     for _ in range(repeats):
         mac_score(pattern, filter_matrix)

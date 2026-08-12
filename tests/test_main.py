@@ -72,15 +72,19 @@ class SimulatorAppTest(unittest.TestCase):
         self.assertIn("실패: 3개", messages)
 
     def test_missing_json_file_does_not_crash(self) -> None:
+        missing_path = PROJECT_ROOT / "missing-data.json"
         app, messages = self.make_app(
             [],
-            data_path=PROJECT_ROOT / "missing-data.json",
+            data_path=missing_path,
         )
 
         completed = app.run_json_mode()
 
         self.assertFalse(completed)
         self.assertTrue(any("분석 중단" in message for message in messages))
+        self.assertTrue(
+            any(str(missing_path.resolve()) in message for message in messages)
+        )
 
     def test_eof_exits_safely(self) -> None:
         def raise_eof(_: str) -> str:

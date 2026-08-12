@@ -1,10 +1,13 @@
 """행렬, MAC, 라벨, epsilon 정책 단위 테스트."""
 
 import unittest
+from unittest.mock import patch
 
 from npu import (
     Matrix,
     MatrixError,
+    WARMUP_REPEATS,
+    benchmark_mac,
     compare_scores,
     generate_pattern,
     mac_score,
@@ -55,6 +58,34 @@ class NpuOperationTest(unittest.TestCase):
         )
         self.assertEqual(compare_scores(5.0, 1.0), "A")
         self.assertEqual(compare_scores(1.0, 5.0), "B")
+
+    def test_benchmark_warms_up_before_measured_repeats(self) -> None:
+        matrix = Matrix([[1]])
+        events = []
+
+        def record_score(*_args) -> float:
+            events.append("score")
+            return 1.0
+
+        timer_values = iter((100, 500))
+
+        def record_timer() -> int:
+            events.append("timer")
+            return next(timer_values)
+
+        with patch("npu.mac_score", side_effect=record_score), patch(
+            "npu.perf_counter_ns", side_effect=record_timer
+        ):
+            average_ms = benchmark_mac(matrix, matrix, repeats=4)
+
+        self.assertEqual(
+            events,
+            ["score"] * WARMUP_REPEATS
+            + ["timer"]
+            + ["score"] * 4
+            + ["timer"],
+        )
+        self.assertAlmostEqual(average_ms, 0.0001)
 
 
 if __name__ == "__main__":

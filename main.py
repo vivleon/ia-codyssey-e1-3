@@ -144,15 +144,16 @@ class SimulatorApp:
 
     def run_json_mode(self) -> bool:
         """data.json을 케이스별로 분석하고 성능 및 실패 요약을 출력한다."""
+        data_path = self.data_path.resolve()
         self.output("\n" + "-" * 48)
         self.output("[1] JSON 데이터 로드")
         self.output("-" * 48)
         try:
-            data = load_json_file(self.data_path)
-            self.output(f"✓ 로드 완료: {self.data_path}")
+            data = load_json_file(data_path)
+            self.output(f"✓ 로드 완료: {data_path}")
             report = analyze_dataset(data, EPSILON)
         except DataAnalysisError as error:
-            self.output(f"분석 중단: {error}")
+            self.output(f"분석 중단 ({data_path}): {error}")
             return False
 
         self.output("\n" + "-" * 48)
