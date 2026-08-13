@@ -1,4 +1,8 @@
-"""analysis.py의 JSON 분석 테스트."""
+"""analysis.py의 JSON 분석 테스트.
+
+실제 data.json 결과뿐 아니라 잘못된 키·라벨·필터도 확인한다. 잘못된 케이스
+하나가 다음 케이스의 분석을 막지 않는지가 중요한 테스트 포인트다.
+"""
 
 import unittest
 from pathlib import Path
@@ -12,6 +16,7 @@ from analysis import (
 )
 
 
+# tests 폴더의 한 단계 위가 프로젝트 루트다.
 DATA_FILE = Path(__file__).parents[1] / "data.json"
 
 
@@ -24,6 +29,7 @@ class AnalysisTest(unittest.TestCase):
             extract_size("pattern_13_2")
 
     def test_attached_data_result(self):
+        # 실제 제출 데이터의 총계가 문서와 같은지 확인한다.
         results = analyze_dataset(load_json_file(DATA_FILE))
         summary = summarize(results)
         self.assertEqual(summary["total"], 6)
@@ -31,6 +37,7 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(summary["failed"], 3)
 
     def test_undecided_counts_as_failure(self):
+        # 두 필터가 완전히 같으면 UNDECIDED이고 expected와 달라 FAIL이다.
         data = {
             "filters": {
                 "size_1": {"cross": [[1.0]], "x": [[1.0]]}
@@ -44,6 +51,7 @@ class AnalysisTest(unittest.TestCase):
         self.assertFalse(result["passed"])
 
     def test_bad_case_does_not_stop_other_cases(self):
+        # 첫 케이스가 잘못되어도 두 번째 정상 케이스는 계속 분석되어야 한다.
         data = {
             "filters": {
                 "size_1": {"cross": [[1]], "x": [[0]]}
@@ -80,6 +88,7 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(result["predicted"], "ERROR")
 
     def test_performance_has_n_squared(self):
+        # 시간은 매번 달라도 연산 위치 수 N²은 항상 고정된다.
         performance = measure_sizes((3, 5), repeats=10)
         self.assertEqual(performance[0]["operations"], 9)
         self.assertEqual(performance[1]["operations"], 25)
