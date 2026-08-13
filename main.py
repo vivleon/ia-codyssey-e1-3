@@ -1,311 +1,186 @@
-"""Mini NPU Simulator 콘솔 애플리케이션."""
+"""Mini NPU Simulator 실행 파일."""
 
 import argparse
-import json
-import math
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
 
-from analysis import (
-    AnalysisReport,
-    DataAnalysisError,
-    PerformanceResult,
-    analyze_dataset,
-    load_json_file,
-    measure_sizes,
-)
-from npu import (
-    EPSILON,
-    Matrix,
-    benchmark_mac,
-    compare_scores,
-    mac_score,
-)
+from analysis import analyze_dataset, load_json_file, measure_sizes, summarize
+from npu import EPSILON, compare_scores, mac_score, measure_mac_time
 
 
-DEFAULT_DATA_PATH = Path(__file__).resolve().with_name("data.json")
+DATA_FILE = Path(__file__).with_name("data.json")
 
 
-class SimulatorApp:
-    """사용자 입력 모드와 JSON 분석 모드의 콘솔 흐름을 관리한다."""
+def read_matrix(title, size=3, input_func=input, output_func=print):
+    """사용자에게 숫자 행렬을 한 줄씩 입력받는다."""
+    output_func(f"\n{title}: {size}줄을 입력하세요.")
+    output_func("한 줄에 숫자를 공백으로 구분합니다. 취소: Ctrl+C")
 
-    def __init__(
-        self,
-        data_path: Path = DEFAULT_DATA_PATH,
-        repeats: int = 10,
-        input_func: Callable[[str], str] = input,
-        output_func: Callable[[str], None] = print,
-        epsilon: float = EPSILON,
-        summary_json: bool = False,
-    ) -> None:
-        if repeats < 10:
-            raise ValueError("성능 측정 반복 횟수는 최소 10회여야 합니다.")
-        if (
-            isinstance(epsilon, bool)
-            or not isinstance(epsilon, (int, float))
-            or not math.isfinite(epsilon)
-            or epsilon <= 0
-        ):
-            raise ValueError("epsilon은 0보다 큰 유한한 숫자여야 합니다.")
-        self.data_path = Path(data_path)
-        self.repeats = repeats
-        self.epsilon = float(epsilon)
-        self.summary_json = summary_json
-        self.input = input_func
-        self.output = output_func
-
-    def run(self, mode: Optional[str] = None) -> bool:
-        """선택한 모드를 실행하고 정상 완료 여부를 반환한다."""
-        self.output("=== Mini NPU Simulator ===")
-        try:
-            selected_mode = mode or self._read_mode()
-            if selected_mode == "user":
-                self.run_user_mode()
-                return True
-            if selected_mode == "json":
-                return self.run_json_mode()
-            raise ValueError(f"지원하지 않는 모드입니다: {selected_mode}")
-        except (KeyboardInterrupt, EOFError):
-            self.output("\n입력이 중단되어 안전하게 종료합니다.")
-            return False
-
-    def _read_mode(self) -> str:
-        self.output("\n[모드 선택]")
-        self.output("1. 사용자 입력 (3×3)")
-        self.output("2. data.json 분석")
+    matrix = []
+    for row_number in range(1, size + 1):
         while True:
-            selected = self.input("선택: ").strip()
-            if selected == "1":
-                return "user"
-            if selected == "2":
-                return "json"
-            self.output("입력 오류: 1 또는 2를 입력하세요.")
+            words = input_func(f"{row_number}행: ").split()
 
-    def read_matrix(self, title: str, size: int = 3) -> Matrix:
-        """행 단위 숫자 입력을 검증하고 n×n Matrix로 만든다."""
-        self.output(f"\n{title} ({size}줄 입력, 공백 구분)")
-        self.output("입력을 취소하려면 Ctrl+C를 누르세요.")
-        rows: List[List[float]] = []
-        for row_index in range(size):
-            while True:
-                raw_row = self.input(f"{row_index + 1}행: ").strip()
-                parts = raw_row.split()
-                if len(parts) != size:
-                    self.output(
-                        f"입력 형식 오류: 각 줄에 {size}개의 숫자를 "
-                        "공백으로 구분해 입력하세요."
-                    )
-                    continue
-                try:
-                    row = [float(part) for part in parts]
-                except ValueError:
-                    self.output(
-                        f"입력 형식 오류: 각 줄에 {size}개의 숫자를 "
-                        "공백으로 구분해 입력하세요."
-                    )
-                    continue
-                rows.append(row)
-                break
-        return Matrix(rows)
+            if len(words) != size:
+                output_func(f"입력 오류: 숫자 {size}개를 입력하세요.")
+                continue
 
-    def run_user_mode(self) -> None:
-        """필터 A/B와 패턴을 입력받아 3×3 MAC 판정을 수행한다."""
-        self.output("\n" + "-" * 48)
-        self.output("[1] 필터 입력")
-        self.output("-" * 48)
-        filter_a = self.read_matrix("필터 A")
-        filter_b = self.read_matrix("필터 B")
-        self.output("✓ 필터 A, B 저장 완료")
+            try:
+                row = [float(word) for word in words]
+            except ValueError:
+                output_func("입력 오류: 숫자만 입력하세요.")
+                continue
 
-        self.output("\n" + "-" * 48)
-        self.output("[2] 패턴 입력")
-        self.output("-" * 48)
-        pattern = self.read_matrix("패턴")
-        self.output("✓ 패턴 저장 완료")
+            matrix.append(row)
+            break
 
-        score_a = mac_score(pattern, filter_a)
-        score_b = mac_score(pattern, filter_b)
-        predicted = compare_scores(
-            score_a,
-            score_b,
-            "A",
-            "B",
-            self.epsilon,
-        )
-        average_ms = benchmark_mac(pattern, filter_a, self.repeats)
+    return matrix
 
-        self.output("\n" + "-" * 48)
-        self.output("[3] MAC 결과")
-        self.output("-" * 48)
-        self.output(f"A 점수: {score_a:.16g}")
-        self.output(f"B 점수: {score_b:.16g}")
-        self.output(
-            f"연산 시간(MAC 1회 평균/{self.repeats}회): "
-            f"{average_ms:.6f} ms"
-        )
-        if predicted == "UNDECIDED":
-            # 내부 판정값은 유지하고 사용자 모드에서만
-            # 쉬운 한국어로 표시한다.
-            difference = abs(score_a - score_b)
-            self.output(f"판정: 판정 불가 (|A-B| < {self.epsilon:g})")
-            self.output(f"점수 차이: {difference:.16g}")
-        else:
-            self.output(f"판정: {predicted}")
 
-        self._print_performance(
-            [
-                PerformanceResult(
-                    size=3,
-                    average_ms=average_ms,
-                    operations=9,
-                    repeats=self.repeats,
-                )
-            ],
-            section_number=4,
+def choose_mode(input_func=input, output_func=print):
+    """1 또는 2를 입력받아 실행 모드를 반환한다."""
+    output_func("\n1. 사용자 입력 모드")
+    output_func("2. data.json 분석 모드")
+
+    while True:
+        choice = input_func("선택: ").strip()
+        if choice == "1":
+            return "user"
+        if choice == "2":
+            return "json"
+        output_func("입력 오류: 1 또는 2를 입력하세요.")
+
+
+def print_performance(performance, output_func=print):
+    """크기별 평균 시간과 N² 연산 횟수를 표로 출력한다."""
+    repeats = performance[0]["repeats"] if performance else 0
+    output_func(f"\n[성능 분석: 크기별 {repeats}회 평균]")
+    output_func("크기       평균 시간(ms)       연산 횟수(N²)")
+    output_func("-" * 48)
+
+    for item in performance:
+        size_text = f"{item['size']}×{item['size']}"
+        output_func(
+            f"{size_text:<10} {item['average_ms']:>12.6f} "
+            f"{item['operations']:>18}"
         )
 
-    def run_json_mode(self) -> bool:
-        """data.json을 케이스별로 분석하고 성능 및 실패 요약을 출력한다."""
-        data_path = self.data_path.resolve()
-        self.output("\n" + "-" * 48)
-        self.output("[1] JSON 데이터 로드")
-        self.output("-" * 48)
-        try:
-            data = load_json_file(data_path)
-            self.output(f"✓ 로드 완료: {data_path}")
-            report = analyze_dataset(data, self.epsilon)
-        except DataAnalysisError as error:
-            self.output(f"분석 중단 ({data_path}): {error}")
-            return False
 
-        self.output("\n" + "-" * 48)
-        self.output("[2] 패턴 분석 (라벨 정규화 적용)")
-        self.output("-" * 48)
-        self._print_case_results(report)
+def run_user_mode(input_func=input, output_func=print, repeats=10):
+    """3×3 필터 두 개와 패턴 하나를 입력받아 판정한다."""
+    filter_a = read_matrix("필터 A", input_func=input_func, output_func=output_func)
+    filter_b = read_matrix("필터 B", input_func=input_func, output_func=output_func)
+    pattern = read_matrix("입력 패턴", input_func=input_func, output_func=output_func)
 
-        performance = measure_sizes(
-            sizes=(3, 5, 13, 25),
-            repeats=self.repeats,
-        )
-        self._print_performance(performance)
-        self._print_summary(report)
-        return True
+    score_a = mac_score(pattern, filter_a)
+    score_b = mac_score(pattern, filter_b)
+    predicted = compare_scores(score_a, score_b)
+    average_ms = measure_mac_time(pattern, filter_a, repeats)
 
-    def _print_case_results(self, report: AnalysisReport) -> None:
-        for result in report.results:
-            self.output(f"\n--- {result.identifier} ---")
-            if result.scores:
-                self.output(f"Cross 점수: {result.scores['Cross']:.16g}")
-                self.output(f"X 점수: {result.scores['X']:.16g}")
-            expected = result.expected or "UNKNOWN"
-            status = "PASS" if result.passed else "FAIL"
-            self.output(
-                f"판정: {result.predicted} | expected: {expected} | {status}"
-            )
-            if result.reason:
-                self.output(f"사유: {result.reason}")
+    output_func("\n[MAC 결과]")
+    output_func(f"A 점수: {score_a:.16g}")
+    output_func(f"B 점수: {score_b:.16g}")
+    output_func(f"평균 연산 시간({repeats}회): {average_ms:.6f} ms")
 
-    def _print_performance(
-        self,
-        performance: Sequence[PerformanceResult],
-        section_number: int = 3,
-    ) -> None:
-        repeats = performance[0].repeats if performance else self.repeats
-        self.output("\n" + "-" * 48)
-        self.output(f"[{section_number}] 성능 분석 (평균/{repeats}회)")
-        self.output("-" * 48)
-        self.output("크기       평균 시간(ms)       연산 횟수(N²)")
-        self.output("-" * 48)
-        for result in performance:
-            size_label = f"{result.size}×{result.size}"
-            self.output(
-                f"{size_label:<10} {result.average_ms:>12.6f} "
-                f"{result.operations:>18}"
-            )
+    if predicted == "UNDECIDED":
+        output_func(f"판정: 판정 불가 (점수 차이 < {EPSILON:g})")
+        output_func(f"점수 차이: {abs(score_a - score_b):.16g}")
+    else:
+        output_func(f"판정: {predicted}")
 
-    def _print_summary(self, report: AnalysisReport) -> None:
-        self.output("\n" + "-" * 48)
-        self.output("[4] 결과 요약")
-        self.output("-" * 48)
-        self.output(f"총 테스트: {report.total_count}개")
-        self.output(f"통과: {report.passed_count}개")
-        self.output(f"실패: {report.failed_count}개")
-
-        if report.failures:
-            self.output("\n실패 케이스:")
-            for result in report.failures:
-                self.output(f"- {result.identifier}: {result.reason}")
-        else:
-            self.output("\n실패 케이스가 없습니다.")
-
-        if self.summary_json:
-            summary = {
-                "total": report.total_count,
-                "passed": report.passed_count,
-                "failed": report.failed_count,
-                "epsilon": self.epsilon,
-                "failures": [
-                    {
-                        "identifier": result.identifier,
-                        "predicted": result.predicted,
-                        "expected": result.expected,
-                        "reason": result.reason,
-                    }
-                    for result in report.failures
-                ],
+    print_performance(
+        [
+            {
+                "size": 3,
+                "average_ms": average_ms,
+                "operations": 9,
+                "repeats": repeats,
             }
-            self.output(
-                "SUMMARY_JSON: "
-                + json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
-            )
+        ],
+        output_func,
+    )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Mini NPU Simulator")
-    parser.add_argument(
-        "--mode",
-        choices=("user", "json"),
-        help="메뉴를 생략하고 지정한 모드 실행",
-    )
-    parser.add_argument(
-        "--data",
-        type=Path,
-        default=DEFAULT_DATA_PATH,
-        help="분석할 data.json 경로",
-    )
-    parser.add_argument(
-        "--repeats",
-        type=int,
-        default=10,
-        help="크기별 MAC 반복 측정 횟수(최소 10)",
-    )
-    parser.add_argument(
-        "--epsilon",
-        type=float,
-        default=EPSILON,
-        help="동점으로 간주할 절대 허용오차(기본값: 1e-9)",
-    )
-    parser.add_argument(
-        "--summary-json",
-        action="store_true",
-        help="사람용 결과 뒤에 SUMMARY_JSON 한 줄 출력",
-    )
-    return parser
+def print_case_results(results, output_func=print):
+    """JSON 패턴별 점수와 PASS/FAIL을 출력한다."""
+    for result in results:
+        output_func(f"\n--- {result['id']} ---")
 
+        if result["scores"]:
+            output_func(f"Cross 점수: {result['scores']['Cross']:.16g}")
+            output_func(f"X 점수: {result['scores']['X']:.16g}")
 
-def main() -> int:
-    args = build_parser().parse_args()
-    try:
-        app = SimulatorApp(
-            data_path=args.data,
-            repeats=args.repeats,
-            epsilon=args.epsilon,
-            summary_json=args.summary_json,
+        status = "PASS" if result["passed"] else "FAIL"
+        expected = result["expected"] or "UNKNOWN"
+        output_func(
+            f"판정: {result['predicted']} | expected: {expected} | {status}"
         )
+        if result["reason"]:
+            output_func(f"사유: {result['reason']}")
+
+
+def print_summary(results, output_func=print):
+    """총 테스트 수와 실패 케이스를 출력한다."""
+    summary = summarize(results)
+
+    output_func("\n[결과 요약]")
+    output_func(f"총 테스트: {summary['total']}개")
+    output_func(f"통과: {summary['passed']}개")
+    output_func(f"실패: {summary['failed']}개")
+
+    if summary["failures"]:
+        output_func("\n실패 케이스:")
+        for result in summary["failures"]:
+            output_func(f"- {result['id']}: {result['reason']}")
+    else:
+        output_func("실패 케이스가 없습니다.")
+
+
+def run_json_mode(data_path=DATA_FILE, output_func=print, repeats=10):
+    """data.json의 모든 패턴을 분석한다."""
+    output_func(f"\nJSON 파일 읽기: {Path(data_path).resolve()}")
+
+    try:
+        data = load_json_file(data_path)
+        results = analyze_dataset(data)
     except ValueError as error:
-        print(f"설정 오류: {error}")
+        output_func(f"분석 중단: {error}")
+        return False
+
+    print_case_results(results, output_func)
+    print_performance(measure_sizes(repeats=repeats), output_func)
+    print_summary(results, output_func)
+    return True
+
+
+def run(mode=None, data_path=DATA_FILE, repeats=10, input_func=input, output_func=print):
+    """프로그램을 실행하고 정상 종료 여부를 반환한다."""
+    output_func("=== Mini NPU Simulator ===")
+
+    try:
+        selected_mode = mode or choose_mode(input_func, output_func)
+        if selected_mode == "user":
+            run_user_mode(input_func, output_func, repeats)
+            return True
+        if selected_mode == "json":
+            return run_json_mode(data_path, output_func, repeats)
+        output_func(f"지원하지 않는 모드입니다: {selected_mode}")
+        return False
+    except (KeyboardInterrupt, EOFError):
+        output_func("\n입력이 중단되어 안전하게 종료합니다.")
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Mini NPU Simulator")
+    parser.add_argument("--mode", choices=("user", "json"))
+    parser.add_argument("--data", type=Path, default=DATA_FILE)
+    parser.add_argument("--repeats", type=int, default=10)
+    args = parser.parse_args()
+
+    if args.repeats < 10:
+        print("설정 오류: 반복 횟수는 최소 10회여야 합니다.")
         return 2
-    return 0 if app.run(args.mode) else 1
+    return 0 if run(args.mode, args.data, args.repeats) else 1
 
 
 if __name__ == "__main__":

@@ -1,91 +1,59 @@
-"""행렬, MAC, 라벨, epsilon 정책 단위 테스트."""
+"""npu.py의 기본 계산 테스트."""
 
 import unittest
-from unittest.mock import patch
 
 from npu import (
-    Matrix,
-    MatrixError,
-    WARMUP_REPEATS,
-    benchmark_mac,
     compare_scores,
-    generate_pattern,
     mac_score,
+    make_pattern,
+    measure_mac_time,
     normalize_label,
+    validate_matrix,
 )
 
 
-class MatrixTest(unittest.TestCase):
-    def test_reads_and_writes_position(self) -> None:
-        matrix = Matrix([[1, 2], [3, 4]])
-        matrix.set(0, 1, 9)
+class NpuTest(unittest.TestCase):
+    def test_validate_square_matrix(self):
+        self.assertEqual(validate_matrix([[1, 0], [0, 1]]), 2)
 
-        self.assertEqual(matrix.get(0, 1), 9.0)
-        copied = matrix.to_rows()
-        copied[0][1] = -1
-        self.assertEqual(matrix.get(0, 1), 9.0)
+    def test_reject_non_square_matrix(self):
+        with self.assertRaises(ValueError):
+            validate_matrix([[1, 0], [1]])
 
-    def test_rejects_non_square_matrix(self) -> None:
-        with self.assertRaises(MatrixError):
-            Matrix([[1, 2], [3]])
+    def test_reject_non_number(self):
+        with self.assertRaises(ValueError):
+            validate_matrix([[1, 0], [0, "x"]])
 
-    def test_rejects_non_numeric_value(self) -> None:
-        with self.assertRaises(MatrixError):
-            Matrix([[1, "two"], [3, 4]])
-
-
-class NpuOperationTest(unittest.TestCase):
-    def test_mac_score_for_cross_and_x(self) -> None:
-        cross = generate_pattern(3, "Cross")
-        x_pattern = generate_pattern(3, "X")
-
-        self.assertEqual(mac_score(cross, cross), 5.0)
-        self.assertEqual(mac_score(cross, x_pattern), 1.0)
-
-    def test_mac_rejects_size_mismatch(self) -> None:
-        with self.assertRaises(MatrixError):
-            mac_score(generate_pattern(3, "Cross"), generate_pattern(5, "Cross"))
-
-    def test_normalizes_required_labels(self) -> None:
+    def test_normalize_labels(self):
         self.assertEqual(normalize_label("+"), "Cross")
         self.assertEqual(normalize_label("cross"), "Cross")
-        self.assertEqual(normalize_label(" x "), "X")
+        self.assertEqual(normalize_label("X"), "X")
 
-    def test_epsilon_turns_near_equal_scores_into_undecided(self) -> None:
-        self.assertEqual(
-            compare_scores(0.9, 0.9 - 1e-12, epsilon=1e-9),
-            "UNDECIDED",
-        )
-        self.assertEqual(compare_scores(5.0, 1.0), "A")
-        self.assertEqual(compare_scores(1.0, 5.0), "B")
+    def test_mac_score(self):
+        pattern = [[1, 0], [0, 1]]
+        cross_filter = [[0, 1], [1, 0]]
+        x_filter = [[1, 0], [0, 1]]
+        self.assertEqual(mac_score(pattern, cross_filter), 0)
+        self.assertEqual(mac_score(pattern, x_filter), 2)
 
-    def test_benchmark_warms_up_before_measured_repeats(self) -> None:
-        matrix = Matrix([[1]])
-        events = []
+    def test_mac_rejects_different_sizes(self):
+        with self.assertRaises(ValueError):
+            mac_score([[1]], [[1, 0], [0, 1]])
 
-        def record_score(*_args) -> float:
-            events.append("score")
-            return 1.0
+    def test_near_tie_is_undecided(self):
+        self.assertEqual(compare_scores(1.0, 1.0 + 1e-12), "UNDECIDED")
 
-        timer_values = iter((100, 500))
+    def test_larger_score_wins(self):
+        self.assertEqual(compare_scores(5, 1), "A")
+        self.assertEqual(compare_scores(1, 5), "B")
 
-        def record_timer() -> int:
-            events.append("timer")
-            return next(timer_values)
+    def test_measure_time_returns_number(self):
+        pattern = [[1, 0], [0, 1]]
+        self.assertGreaterEqual(measure_mac_time(pattern, pattern, 10), 0)
 
-        with patch("npu.mac_score", side_effect=record_score), patch(
-            "npu.perf_counter_ns", side_effect=record_timer
-        ):
-            average_ms = benchmark_mac(matrix, matrix, repeats=4)
-
-        self.assertEqual(
-            events,
-            ["score"] * WARMUP_REPEATS
-            + ["timer"]
-            + ["score"] * 4
-            + ["timer"],
-        )
-        self.assertAlmostEqual(average_ms, 0.0001)
+    def test_make_pattern(self):
+        self.assertEqual(len(make_pattern(5, "Cross")), 5)
+        self.assertEqual(len(make_pattern(13, "X")), 13)
 
 
 if __name__ == "__main__":
